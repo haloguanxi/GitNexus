@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
+import DOMPurify from 'dompurify';
 import { AlertTriangle, Maximize2 } from 'lucide-react';
 import { ProcessFlowModal } from './ProcessFlowModal';
 import type { ProcessData } from '../lib/mermaid-generator';
@@ -140,7 +141,7 @@ export const MermaidDiagram = ({ code }: MermaidDiagramProps) => {
           <div
             ref={containerRef}
             className="flex items-center justify-center p-4 overflow-auto max-h-[400px]"
-            dangerouslySetInnerHTML={{ __html: svg }}
+            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } }) }}
           />
         </div>
       </div>

@@ -1,7 +1,5 @@
 import * as Comlink from 'comlink';
 import { runIngestionPipeline, runPipelineFromFiles } from '../core/ingestion/pipeline';
-import { createKnowledgeGraph } from '../core/graph/graph';
-import type { GraphNode, GraphRelationship } from '../core/graph/types';
 import { PipelineProgress, SerializablePipelineResult, serializePipelineResult } from '../types/pipeline';
 import { FileEntry } from '../services/zip';
 import {
@@ -14,15 +12,17 @@ import { isEmbedderReady, disposeEmbedder } from '../core/embeddings/embedder';
 import type { EmbeddingProgress, SemanticSearchResult } from '../core/embeddings/types';
 import type { ProviderConfig, AgentStreamChunk } from '../core/llm/types';
 import { createGraphRAGAgent, streamAgentResponse, type AgentMessage, createChatModel } from '../core/llm/agent';
+import { createKnowledgeGraph } from '../core/graph/graph';
+import type { GraphNode, GraphRelationship } from '../core/graph/types';
 import { SystemMessage } from '@langchain/core/messages';
 import { enrichClustersBatch, ClusterMemberInfo, ClusterEnrichment } from '../core/ingestion/cluster-enricher';
 import { CommunityNode } from '../core/ingestion/community-processor';
 import { PipelineResult } from '../types/pipeline';
 import { buildCodebaseContext, type CodebaseContext } from '../core/llm/context-builder';
-import {
-  buildBM25Index,
-  searchBM25,
-  isBM25Ready,
+import { 
+  buildBM25Index, 
+  searchBM25, 
+  isBM25Ready, 
   getBM25Stats,
   mergeWithRRF,
   type HybridSearchResult,
@@ -176,7 +176,7 @@ const createHttpHybridSearch = (backendUrl: string, repo: string) => {
         endLine: s.endLine,
         content: s.content ?? '',
         sources: ['bm25', 'semantic'],
-        score: 1 - (i * 0.02),
+        score: Math.max(0, 1 - (i * 0.02)),
       }));
 
       const defs: any[] = (data.definitions ?? []).map((d: any, i: number) => ({
@@ -186,7 +186,7 @@ const createHttpHybridSearch = (backendUrl: string, repo: string) => {
         filePath: d.filePath,
         content: '',
         sources: ['bm25'],
-        score: 0.5 - (i * 0.02),
+        score: Math.max(0, 0.5 - (i * 0.02)),
       }));
 
       return [...symbols, ...defs].slice(0, k);
@@ -644,6 +644,12 @@ const workerApi = {
   /**
    * Initialize the Graph RAG agent in backend mode (HTTP-backed tools).
    * Uses HTTP wrappers instead of local LadybugDB for all tool queries.
+   *
+   * NOTE: Currently not called by any UI flow. The server-connect path
+   * downloads the full graph and uses local WASM queries via initializeAgent.
+   * This method is retained for future large-repo mode where downloading
+   * the entire graph to the browser would be impractical.
+   *
    * @param config - Provider configuration for the LLM
    * @param backendUrl - Base URL of the gitnexus serve backend
    * @param repoName - Repository name on the backend
@@ -785,8 +791,10 @@ const workerApi = {
       throw new Error('No graph loaded. Please ingest a repository first.');
     }
 
+    enrichmentCancelled = false;
+
     const { graph } = currentGraphResult;
-    
+
     // Filter for community nodes
     const communityNodes = graph.nodes
       .filter(n => n.label === 'Community')
@@ -808,15 +816,22 @@ const workerApi = {
     // Initialize map
     communityNodes.forEach(c => memberMap.set(c.id, []));
     
+    // Build a Map for O(1) node lookups instead of O(N) find per relationship
+    const nodeById = new Map(graph.nodes.map(n => [n.id, n]));
+
     // Find all MEMBER_OF edges
-    graph.relationships.forEach(rel => {
+    for (const rel of graph.relationships) {
+      if (enrichmentCancelled) {
+        console.log('Enrichment cancelled, stopping');
+        break;
+      }
       if (rel.type === 'MEMBER_OF') {
         const communityId = rel.targetId;
         const memberId = rel.sourceId; // MEMBER_OF goes Member -> Community
-        
+
         if (memberMap.has(communityId)) {
           // Find member node details
-          const memberNode = graph.nodes.find(n => n.id === memberId);
+          const memberNode = nodeById.get(memberId);
           if (memberNode) {
             memberMap.get(communityId)?.push({
               name: memberNode.properties.name,
@@ -826,7 +841,7 @@ const workerApi = {
           }
         }
       }
-    });
+    }
 
     // Create LLM client adapter for LangChain model
     const chatModel = createChatModel(providerConfig);
@@ -864,32 +879,28 @@ const workerApi = {
       }
     });
 
-    // Update LadybugDB with new data
+    // Update LadybugDB with new data using prepared statements
     try {
       const lbug = await getLbugAdapter();
-        
+
       onProgress(enrichments.size, enrichments.size); // Done
-      
-      // Update one by one via Cypher (simplest for now)
-      for (const [id, enrichment] of enrichments.entries()) {
-         // Escape strings for Cypher - replace backslash first, then quotes
-         const escapeCypher = (str: string) => str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-         
-         const keywordsStr = JSON.stringify(enrichment.keywords);
-         const descStr = escapeCypher(enrichment.description);
-         const nameStr = escapeCypher(enrichment.name);
-         const escapedId = escapeCypher(id);
-         
-         const query = `
-           MATCH (c:Community {id: "${escapedId}"})
-           SET c.label = "${nameStr}", 
-               c.keywords = ${keywordsStr}, 
-               c.description = "${descStr}",
-               c.enrichedBy = "llm"
-         `;
-         
-         await lbug.executeQuery(query);
-      }
+
+      const paramsList = Array.from(enrichments.entries()).map(([id, enrichment]) => ({
+        id,
+        label: enrichment.name,
+        keywords: enrichment.keywords,
+        description: enrichment.description,
+      }));
+
+      const updateQuery = `
+        MATCH (c:Community {id: $id})
+        SET c.label = $label,
+            c.keywords = $keywords,
+            c.description = $description,
+            c.enrichedBy = "llm"
+      `;
+
+      await lbug.executeWithReusedStatement(updateQuery, paramsList);
 
     } catch (err) {
       console.error('Failed to update LadybugDB with enrichment:', err);
