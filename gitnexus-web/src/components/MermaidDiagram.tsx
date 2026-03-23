@@ -141,7 +141,7 @@ export const MermaidDiagram = ({ code }: MermaidDiagramProps) => {
           <div
             ref={containerRef}
             className="flex items-center justify-center p-4 overflow-auto max-h-[400px]"
-            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } }) }}
+            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true }, ADD_TAGS: ['foreignObject'] }) }}
           />
         </div>
       </div>

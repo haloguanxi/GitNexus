@@ -148,7 +148,7 @@ export const ProcessFlowModal = ({ process, onClose, onFocusInGraph, isFullScree
 
                 const { svg } = await mermaid.render(id, mermaidCode);
                 if (!diagramRef.current) return;
-                diagramRef.current!.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
+                diagramRef.current!.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true }, ADD_TAGS: ['foreignObject'] });
             } catch (error) {
                 console.error('Mermaid render error:', error);
                 const errorMessage = error instanceof Error ? error.message : String(error);
