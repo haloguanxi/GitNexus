@@ -141,6 +141,45 @@ program
   .option('-r, --repo <name>', 'Target repository')
   .action(createLazyAction(() => import('./tool.js'), 'cypherCommand'));
 
+program
+  .command('find-impl <interface_name>')
+  .description('Find classes implementing an interface or extending a base class')
+  .option('-r, --repo <name>', 'Target repository')
+  .option('--no-fuzzy', 'Disable fuzzy matching (exact match only)')
+  .option('--content', 'Include source code in results')
+  .option('-l, --limit <n>', 'Maximum results', '20')
+  .action(createLazyAction(() => import('./tool.js'), 'findImplementationsCommand'));
+
+program
+  .command('class-code [class_name]')
+  .description('Get complete class code with methods and fields')
+  .option('-r, --repo <name>', 'Target repository')
+  .option('-f, --file <path>', 'File path for exact match')
+  .option('--no-methods', 'Exclude method list')
+  .option('--no-fields', 'Exclude field list')
+  .option('--no-content', 'Exclude source code (metadata only)')
+  .action(createLazyAction(() => import('./tool.js'), 'getClassCodeCommand'));
+
+program
+  .command('search <query>')
+  .description('Search symbols by name or keyword')
+  .option('-r, --repo <name>', 'Target repository')
+  .option('-t, --type <type>', 'Filter by symbol type (Class, Interface, Method, Function, all)', 'all')
+  .option('-f, --file <path>', 'Filter by file path')
+  .option('--no-fuzzy', 'Disable fuzzy matching')
+  .option('--content-search', 'Search in code content')
+  .option('--content', 'Include source code in results')
+  .option('-l, --limit <n>', 'Maximum results', '20')
+  .action(createLazyAction(() => import('./tool.js'), 'searchSymbolsCommand'));
+
+program
+  .command('file-symbols <file_path>')
+  .description('Get all symbols in a file')
+  .option('-r, --repo <name>', 'Target repository')
+  .option('-t, --type <type>', 'Filter by symbol type (Class, Interface, Method, Function, all)', 'all')
+  .option('--content', 'Include source code for each symbol')
+  .action(createLazyAction(() => import('./tool.js'), 'getFileSymbolsCommand'));
+
 // ─── Eval Server (persistent daemon for SWE-bench) ─────────────────
 
 program

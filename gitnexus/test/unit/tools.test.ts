@@ -2,7 +2,7 @@
  * Unit Tests: MCP Tool Definitions
  *
  * Tests: GITNEXUS_TOOLS from tools.ts
- * - All 16 tools are defined (per-repo + group_*)
+ * - All 20 tools are defined (per-repo + group_*)
  * - Each tool has valid name, description, inputSchema
  * - Required fields are correct
  * - Optional repo parameter is present on tools that need it
@@ -19,8 +19,8 @@ const GROUP_TOOLS = new Set([
 ]);
 
 describe('GITNEXUS_TOOLS', () => {
-  it('exports all tools (7 base + 3 route/tool/shape + 1 api_impact + 5 group)', () => {
-    expect(GITNEXUS_TOOLS).toHaveLength(16);
+  it('exports all tools (7 base + 3 route/tool/shape + 1 api_impact + 5 group + 4 ast)', () => {
+    expect(GITNEXUS_TOOLS).toHaveLength(20);
   });
 
   it('contains all expected tool names', () => {
@@ -35,6 +35,10 @@ describe('GITNEXUS_TOOLS', () => {
         'rename',
         'impact',
         'api_impact',
+        'find_implementations',
+        'get_class_code',
+        'search_symbols',
+        'get_file_symbols',
       ]),
     );
   });
@@ -152,5 +156,39 @@ describe('GITNEXUS_TOOLS', () => {
     const shapeCheckTool = GITNEXUS_TOOLS.find((t) => t.name === 'shape_check')!;
     expect(shapeCheckTool.description).toContain('api_impact');
     expect(shapeCheckTool.description).toContain('pre-change analysis');
+  });
+
+  // AST query tools tests
+  it('find_implementations tool requires interface_name parameter', () => {
+    const findImplTool = GITNEXUS_TOOLS.find((t) => t.name === 'find_implementations')!;
+    expect(findImplTool).toBeDefined();
+    expect(findImplTool.inputSchema.required).toContain('interface_name');
+    expect(findImplTool.inputSchema.properties.interface_name).toBeDefined();
+    expect(findImplTool.inputSchema.properties.fuzzy_match).toBeDefined();
+    expect(findImplTool.inputSchema.properties.fuzzy_match.default).toBe(true);
+  });
+
+  it('get_class_code tool has optional class_name and file_path', () => {
+    const getClassTool = GITNEXUS_TOOLS.find((t) => t.name === 'get_class_code')!;
+    expect(getClassTool).toBeDefined();
+    expect(getClassTool.inputSchema.required).toEqual([]);
+    expect(getClassTool.inputSchema.properties.class_name).toBeDefined();
+    expect(getClassTool.inputSchema.properties.file_path).toBeDefined();
+  });
+
+  it('search_symbols tool requires query parameter', () => {
+    const searchTool = GITNEXUS_TOOLS.find((t) => t.name === 'search_symbols')!;
+    expect(searchTool).toBeDefined();
+    expect(searchTool.inputSchema.required).toContain('query');
+    expect(searchTool.inputSchema.properties.query).toBeDefined();
+    expect(searchTool.inputSchema.properties.fuzzy_match).toBeDefined();
+    expect(searchTool.inputSchema.properties.fuzzy_match.default).toBe(true);
+  });
+
+  it('get_file_symbols tool requires file_path parameter', () => {
+    const fileSymbolsTool = GITNEXUS_TOOLS.find((t) => t.name === 'get_file_symbols')!;
+    expect(fileSymbolsTool).toBeDefined();
+    expect(fileSymbolsTool.inputSchema.required).toContain('file_path');
+    expect(fileSymbolsTool.inputSchema.properties.file_path).toBeDefined();
   });
 });

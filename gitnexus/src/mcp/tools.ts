@@ -453,4 +453,96 @@ WHEN TO USE: Before group_sync or when agents should refresh indexes.`,
       required: ['name'],
     },
   },
+  {
+    name: 'find_implementations',
+    description: `Find all classes that implement a given interface or extend a base class.
+
+WHEN TO USE: When you need to find concrete implementations of an interface or subclasses of a base class.
+AFTER THIS: Use get_class_code to retrieve full implementation details.
+
+Returns: List of implementing classes with their file locations, and optionally the full code.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        interface_name: { type: 'string', description: 'Interface or base class name to find implementations for' },
+        fuzzy_match: { type: 'boolean', description: 'Enable fuzzy matching (CONTAINS) for interface name (default: true)', default: true },
+        include_content: { type: 'boolean', description: 'Include full source code for each implementation (default: false)', default: false },
+        repo: { type: 'string', description: 'Repository name or path. Omit if only one repo is indexed.' },
+      },
+      required: ['interface_name'],
+    },
+  },
+  {
+    name: 'get_class_code',
+    description: `Get complete class code including methods, fields, and relationships.
+
+WHEN TO USE: When you need the full source code of a class, including its methods and fields.
+AFTER THIS: Use impact() to analyze what depends on this class.
+
+Returns: Class metadata, full source code, method list, field list, implements/extends relationships.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        class_name: { type: 'string', description: 'Class name (supports fuzzy matching)' },
+        file_path: { type: 'string', description: 'File path for exact match (alternative to class_name)' },
+        include_methods: { type: 'boolean', description: 'Include method list (default: true)', default: true },
+        include_fields: { type: 'boolean', description: 'Include field list (default: true)', default: true },
+        include_content: { type: 'boolean', description: 'Include full source code (default: true)', default: true },
+        repo: { type: 'string', description: 'Repository name or path. Omit if only one repo is indexed.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'search_symbols',
+    description: `Fuzzy search symbols by name or keyword in code content.
+
+WHEN TO USE: When you need to find symbols (classes, methods, functions) by name or search for code patterns.
+AFTER THIS: Use context() on a specific symbol for deeper analysis.
+
+Returns: List of matching symbols with their types, file locations, and optionally source code.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search keyword or code snippet' },
+        symbol_type: {
+          type: 'string',
+          description: 'Filter by symbol type',
+          enum: ['Class', 'Interface', 'Method', 'Function', 'all'],
+          default: 'all',
+        },
+        file_path: { type: 'string', description: 'Filter by file path (partial match)' },
+        fuzzy_match: { type: 'boolean', description: 'Enable fuzzy matching (default: true)', default: true },
+        search_content: { type: 'boolean', description: 'Search in code content, not just symbol names (default: false)', default: false },
+        include_content: { type: 'boolean', description: 'Include source code in results (default: false)', default: false },
+        limit: { type: 'number', description: 'Maximum number of results (default: 20)', default: 20 },
+        repo: { type: 'string', description: 'Repository name or path. Omit if only one repo is indexed.' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'get_file_symbols',
+    description: `Get all symbols (classes, methods, functions) in a file by file path.
+
+WHEN TO USE: When you need to see all code structures in a specific file.
+AFTER THIS: Use get_class_code or context() for detailed analysis of specific symbols.
+
+Returns: File metadata and list of all symbols with their types, line numbers, and optionally source code.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: 'File path (supports partial match)' },
+        include_content: { type: 'boolean', description: 'Include source code for each symbol (default: false)', default: false },
+        symbol_type: {
+          type: 'string',
+          description: 'Filter by symbol type',
+          enum: ['Class', 'Interface', 'Method', 'Function', 'all'],
+          default: 'all',
+        },
+        repo: { type: 'string', description: 'Repository name or path. Omit if only one repo is indexed.' },
+      },
+      required: ['file_path'],
+    },
+  },
 ];

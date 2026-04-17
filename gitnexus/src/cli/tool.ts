@@ -164,3 +164,109 @@ export async function cypherCommand(
   });
   output(result);
 }
+
+export async function findImplementationsCommand(
+  interfaceName: string,
+  options?: {
+    repo?: string;
+    fuzzy?: boolean;
+    content?: boolean;
+    limit?: string;
+  },
+): Promise<void> {
+  if (!interfaceName?.trim()) {
+    console.error('Usage: gitnexus find-impl <interface_name>');
+    process.exit(1);
+  }
+
+  const backend = await getBackend();
+  const result = await backend.callTool('find_implementations', {
+    interface_name: interfaceName,
+    fuzzy_match: options?.fuzzy ?? true,
+    include_content: options?.content ?? false,
+    limit: options?.limit ? parseInt(options.limit, 10) : 20,
+    repo: options?.repo,
+  });
+  output(result);
+}
+
+export async function getClassCodeCommand(
+  className: string,
+  options?: {
+    repo?: string;
+    file?: string;
+    methods?: boolean;
+    fields?: boolean;
+    content?: boolean;
+  },
+): Promise<void> {
+  if (!className?.trim() && !options?.file) {
+    console.error('Usage: gitnexus class-code <class_name> [--file <path>]');
+    process.exit(1);
+  }
+
+  const backend = await getBackend();
+  const result = await backend.callTool('get_class_code', {
+    class_name: className || undefined,
+    file_path: options?.file,
+    include_methods: options?.methods ?? true,
+    include_fields: options?.fields ?? true,
+    include_content: options?.content ?? true,
+    repo: options?.repo,
+  });
+  output(result);
+}
+
+export async function searchSymbolsCommand(
+  query: string,
+  options?: {
+    repo?: string;
+    type?: string;
+    file?: string;
+    fuzzy?: boolean;
+    contentSearch?: boolean;
+    content?: boolean;
+    limit?: string;
+  },
+): Promise<void> {
+  if (!query?.trim()) {
+    console.error('Usage: gitnexus search <query>');
+    process.exit(1);
+  }
+
+  const backend = await getBackend();
+  const result = await backend.callTool('search_symbols', {
+    query,
+    symbol_type: options?.type || 'all',
+    file_path: options?.file,
+    fuzzy_match: options?.fuzzy ?? true,
+    search_content: options?.contentSearch ?? false,
+    include_content: options?.content ?? false,
+    limit: options?.limit ? parseInt(options.limit) : 20,
+    repo: options?.repo,
+  });
+  output(result);
+}
+
+export async function getFileSymbolsCommand(
+  filePath: string,
+  options?: {
+    repo?: string;
+    type?: string;
+    content?: boolean;
+  },
+): Promise<void> {
+  if (!filePath?.trim()) {
+    console.error('Usage: gitnexus file-symbols <file_path>');
+    process.exit(1);
+  }
+
+  const backend = await getBackend();
+  const result = await backend.callTool('get_file_symbols', {
+    file_path: filePath,
+    include_content: options?.content ?? false,
+    symbol_type: options?.type || 'all',
+    repo: options?.repo,
+  });
+  output(result);
+}

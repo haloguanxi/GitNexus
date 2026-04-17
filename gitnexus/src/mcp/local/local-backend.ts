@@ -497,6 +497,14 @@ export class LocalBackend {
         return this.toolMap(repo, params);
       case 'api_impact':
         return this.apiImpact(repo, params);
+      case 'find_implementations':
+        return this.findImplementations(repo, params);
+      case 'get_class_code':
+        return this.getClassCode(repo, params);
+      case 'search_symbols':
+        return this.searchSymbols(repo, params);
+      case 'get_file_symbols':
+        return this.getFileSymbols(repo, params);
       default:
         throw new Error(`Unknown tool: ${method}`);
     }
@@ -2586,6 +2594,379 @@ export class LocalBackend {
   private async groupStatus(params: Record<string, unknown>): Promise<unknown> {
     await this.refreshRepos();
     return this.getGroupService().groupStatus(params);
+  }
+
+  // ─── AST Query Tools ───────────────────────────────────────────────
+
+  private async findImplementations(
+    repo: RepoHandle,
+    params: {
+      interface_name: string;
+      fuzzy_match?: boolean;
+      include_content?: boolean;
+    },
+  ): Promise<any> {
+    await this.ensureInitialized(repo.id);
+
+    const { interface_name, fuzzy_match = true, include_content = false } = params;
+
+    if (!interface_name?.trim()) {
+      return { error: 'interface_name parameter is required.' };
+    }
+
+    const nameFilter = fuzzy_match
+      ? 'WHERE iface.name CONTAINS $name'
+      : 'WHERE iface.name = $name';
+
+    // Find implementations via IMPLEMENTS relationship
+    const implRows = await executeParameterized(
+      repo.id,
+      `
+      MATCH (impl)-[r:CodeRelation {type: 'IMPLEMENTS'}]->(iface)
+      ${nameFilter}
+      RETURN impl.id AS id, impl.name AS name, labels(impl)[0] AS type,
+             impl.filePath AS filePath, impl.startLine AS startLine,
+             impl.endLine AS endLine, iface.name AS interfaceName
+             ${include_content ? ', impl.content AS content' : ''}
+      `,
+      { name: interface_name },
+    ).catch(() => []);
+
+    // Also check EXTENDS relationship for base classes
+    const extendsRows = await executeParameterized(
+      repo.id,
+      `
+      MATCH (child)-[r:CodeRelation {type: 'EXTENDS'}]->(parent)
+      ${nameFilter.replace(/iface/g, 'parent')}
+      RETURN child.id AS id, child.name AS name, labels(child)[0] AS type,
+             child.filePath AS filePath, child.startLine AS startLine,
+             child.endLine AS endLine, parent.name AS interfaceName
+             ${include_content ? ', child.content AS content' : ''}
+      `,
+      { name: interface_name },
+    ).catch(() => []);
+
+    const allImpls = [...implRows, ...extendsRows];
+
+    if (allImpls.length === 0) {
+      return {
+        interface: interface_name,
+        implementations: [],
+        total: 0,
+        message: `No implementations found for "${interface_name}".`,
+      };
+    }
+
+    return {
+      interface: interface_name,
+      implementations: allImpls.map((row) => ({
+        name: row.name || row[1],
+        type: row.type || row[2],
+        filePath: row.filePath || row[3],
+        startLine: row.startLine || row[4],
+        endLine: row.endLine || row[5],
+        interfaceName: row.interfaceName || row[6],
+        ...(include_content && row.content ? { content: row.content || row[7] } : {}),
+      })),
+      total: allImpls.length,
+    };
+  }
+
+  private async getClassCode(
+    repo: RepoHandle,
+    params: {
+      class_name?: string;
+      file_path?: string;
+      include_methods?: boolean;
+      include_fields?: boolean;
+      include_content?: boolean;
+    },
+  ): Promise<any> {
+    await this.ensureInitialized(repo.id);
+
+    const { class_name, file_path, include_methods = true, include_fields = true, include_content = true } = params;
+
+    if (!class_name && !file_path) {
+      return { error: 'Either class_name or file_path parameter is required.' };
+    }
+
+    // Build filter clause
+    let filterClause: string;
+    let queryParams: Record<string, any>;
+
+    if (file_path) {
+      filterClause = 'WHERE c.filePath CONTAINS $filePath';
+      queryParams = { filePath: file_path };
+    } else {
+      filterClause = 'WHERE c.name = $name OR c.name CONTAINS $name';
+      queryParams = { name: class_name };
+    }
+
+    // Find the class
+    const classRows = await executeParameterized(
+      repo.id,
+      `
+      MATCH (c:Class)
+      ${filterClause}
+      RETURN c.id AS id, c.name AS name, c.filePath AS filePath,
+             c.startLine AS startLine, c.endLine AS endLine,
+             c.isExported AS isExported
+             ${include_content ? ', c.content AS content' : ''}
+      LIMIT 1
+      `,
+      queryParams,
+    ).catch(() => []);
+
+    if (classRows.length === 0) {
+      return {
+        error: `Class not found: ${class_name || file_path}`,
+        suggestion: 'Try using search_symbols to find the correct class name.',
+      };
+    }
+
+    const classInfo = classRows[0];
+    const classId = classInfo.id || classInfo[0];
+
+    const result: any = {
+      class: {
+        name: classInfo.name || classInfo[1],
+        type: 'Class',
+        filePath: classInfo.filePath || classInfo[2],
+        startLine: classInfo.startLine || classInfo[3],
+        endLine: classInfo.endLine || classInfo[4],
+        isExported: classInfo.isExported || classInfo[5],
+        ...(include_content && classInfo.content ? { content: classInfo.content || classInfo[6] } : {}),
+      },
+      methods: [],
+      fields: [],
+      implements: [],
+      extends: null,
+    };
+
+    // Get methods
+    if (include_methods) {
+      const methodRows = await executeParameterized(
+        repo.id,
+        `
+        MATCH (c:Class {id: $classId})-[r:CodeRelation {type: 'HAS_METHOD'}]->(m:Method)
+        RETURN m.name AS name, m.startLine AS startLine, m.endLine AS endLine,
+               m.parameterCount AS parameterCount, m.returnType AS returnType
+               ${include_content ? ', m.content AS content' : ''}
+        ORDER BY m.startLine
+        `,
+        { classId },
+      ).catch(() => []);
+
+      result.methods = methodRows.map((row) => ({
+        name: row.name || row[0],
+        startLine: row.startLine || row[1],
+        endLine: row.endLine || row[2],
+        parameterCount: row.parameterCount || row[3],
+        returnType: row.returnType || row[4],
+        ...(include_content && row.content ? { content: row.content || row[5] } : {}),
+      }));
+    }
+
+    // Get fields/properties
+    if (include_fields) {
+      const fieldRows = await executeParameterized(
+        repo.id,
+        `
+        MATCH (c:Class {id: $classId})-[r:CodeRelation {type: 'HAS_PROPERTY'}]->(p:Property)
+        RETURN p.name AS name, p.declaredType AS declaredType, p.startLine AS startLine
+        ORDER BY p.startLine
+        `,
+        { classId },
+      ).catch(() => []);
+
+      result.fields = fieldRows.map((row) => ({
+        name: row.name || row[0],
+        type: row.declaredType || row[1],
+        startLine: row.startLine || row[2],
+      }));
+    }
+
+    // Get implements
+    const implRows = await executeParameterized(
+      repo.id,
+      `
+      MATCH (c:Class {id: $classId})-[r:CodeRelation {type: 'IMPLEMENTS'}]->(i:Interface)
+      RETURN i.name AS name
+      `,
+      { classId },
+    ).catch(() => []);
+
+    result.implements = implRows.map((row) => row.name || row[0]);
+
+    // Get extends
+    const extendsRows = await executeParameterized(
+      repo.id,
+      `
+      MATCH (c:Class {id: $classId})-[r:CodeRelation {type: 'EXTENDS'}]->(parent)
+      RETURN parent.name AS name
+      LIMIT 1
+      `,
+      { classId },
+    ).catch(() => []);
+
+    if (extendsRows.length > 0) {
+      result.extends = extendsRows[0].name || extendsRows[0][0];
+    }
+
+    return result;
+  }
+
+  private async searchSymbols(
+    repo: RepoHandle,
+    params: {
+      query: string;
+      symbol_type?: string;
+      file_path?: string;
+      fuzzy_match?: boolean;
+      search_content?: boolean;
+      include_content?: boolean;
+      limit?: number;
+    },
+  ): Promise<any> {
+    await this.ensureInitialized(repo.id);
+
+    const {
+      query: searchQuery,
+      symbol_type = 'all',
+      file_path,
+      fuzzy_match = true,
+      search_content = false,
+      include_content = false,
+      limit = 20,
+    } = params;
+
+    if (!searchQuery?.trim()) {
+      return { error: 'query parameter is required.' };
+    }
+
+    // Build type filter
+    const typeFilter = symbol_type === 'all' ? '' : `AND labels(n)[0] = $symbolType`;
+
+    // Build file filter
+    const fileFilter = file_path ? 'AND n.filePath CONTAINS $filePath' : '';
+
+    // Build name filter
+    const nameFilter = fuzzy_match ? 'n.name CONTAINS $query' : 'n.name = $query';
+
+    // Build content filter
+    const contentFilter = search_content ? `OR n.content CONTAINS $query` : '';
+
+    const queryParams: Record<string, any> = { query: searchQuery };
+    if (symbol_type !== 'all') queryParams.symbolType = symbol_type;
+    if (file_path) queryParams.filePath = file_path;
+
+    const rows = await executeParameterized(
+      repo.id,
+      `
+      MATCH (n)
+      WHERE (${nameFilter} ${contentFilter})
+        ${typeFilter}
+        ${fileFilter}
+      RETURN n.id AS id, n.name AS name, labels(n)[0] AS type,
+             n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine,
+             n.label AS bizLabel, n.heuristicLabel AS heuristicLabel
+             ${include_content ? ', n.content AS content' : ''}
+      LIMIT $limit
+      `,
+      { ...queryParams, limit },
+    ).catch(() => []);
+
+    return {
+      query: searchQuery,
+      results: rows.map((row) => ({
+        name: row.name || row[1],
+        type: row.type || row[2],
+        bizLabel: row.bizLabel || row[6],
+        heuristicLabel: row.heuristicLabel || row[7],
+        filePath: row.filePath || row[3],
+        startLine: row.startLine || row[4],
+        endLine: row.endLine || row[5],
+        matchType: 'fuzzy',
+        ...(include_content && row.content ? { content: row.content || row[8] } : {}),
+      })),
+      total: rows.length,
+    };
+  }
+
+  private async getFileSymbols(
+    repo: RepoHandle,
+    params: {
+      file_path: string;
+      include_content?: boolean;
+      symbol_type?: string;
+    },
+  ): Promise<any> {
+    await this.ensureInitialized(repo.id);
+
+    const { file_path, include_content = false, symbol_type = 'all' } = params;
+
+    if (!file_path?.trim()) {
+      return { error: 'file_path parameter is required.' };
+    }
+
+    // Find the file
+    const fileRows = await executeParameterized(
+      repo.id,
+      `
+      MATCH (f:File)
+      WHERE f.filePath CONTAINS $path OR f.name = $path
+      RETURN f.id AS id, f.name AS name, f.filePath AS filePath
+      LIMIT 1
+      `,
+      { path: file_path },
+    ).catch(() => []);
+
+    if (fileRows.length === 0) {
+      return {
+        error: `File not found: ${file_path}`,
+        suggestion: 'Try using a partial file name or path.',
+      };
+    }
+
+    const fileInfo = fileRows[0];
+    const fileId = fileInfo.id || fileInfo[0];
+
+    // Build type filter - note: labels(n)[0] returns empty string in LadybugDB
+    // So we don't filter by node labels, just return all symbols
+    const queryParams: Record<string, any> = { fileId };
+
+    // Get all symbols defined in this file
+    const symbolRows = await executeParameterized(
+      repo.id,
+      `
+      MATCH (f:File {id: $fileId})-[r:CodeRelation {type: 'DEFINES'}]->(n)
+      RETURN n.id AS id, n.name AS name, labels(n)[0] AS type,
+             n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine,
+             n.isExported AS isExported, n.label AS bizLabel, n.heuristicLabel AS heuristicLabel
+             ${include_content ? ', n.content AS content' : ''}
+      ORDER BY n.startLine
+      `,
+      queryParams,
+    ).catch(() => []);
+
+    return {
+      file: {
+        name: fileInfo.name || fileInfo[1],
+        filePath: fileInfo.filePath || fileInfo[2],
+      },
+      symbols: symbolRows.map((row) => ({
+        name: row.name || row[1],
+        type: row.type || row[2],
+        bizLabel: row.bizLabel || row[7],
+        heuristicLabel: row.heuristicLabel || row[8],
+        filePath: row.filePath || row[3],
+        startLine: row.startLine || row[4],
+        endLine: row.endLine || row[5],
+        isExported: row.isExported || row[6],
+        ...(include_content && row.content ? { content: row.content || row[9] } : {}),
+      })),
+      total: symbolRows.length,
+    };
   }
 
   /**
